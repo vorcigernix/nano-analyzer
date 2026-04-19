@@ -104,7 +104,11 @@ go run ./cmd/nano-analyzer scan --fail-mode validated --fail-on high --fail-conf
 
 ## GitHub Actions
 
-Use the bundled composite action to scan pull requests as part of your GitHub flow. Add this file to the repository you want to protect:
+Use the bundled composite action to scan pull requests as part of your GitHub flow.
+
+### Minimal Workflow
+
+Add an Actions secret named `OPENAI_API_KEY` in the target repository, then create:
 
 `.github/workflows/nano-analyzer.yml`
 
@@ -129,46 +133,40 @@ jobs:
       - uses: vorcigernix/nano-analyzer@main
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+```
+
+That is enough to scan changed files on pull requests, upload the full output artifact, upload SARIF when GitHub code scanning is available, and fail on validated high-or-above findings.
+
+If you are using an organization mirror, replace only the `uses:` line:
+
+```yaml
+      - uses: weareaisle/nano-analyzer@main
+```
+
+### Common Options
+
+Non-blocking trial:
+
+```yaml
+      - uses: vorcigernix/nano-analyzer@main
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        with:
+          fail-mode: never
+```
+
+Explicit PR gate:
+
+```yaml
+      - uses: vorcigernix/nano-analyzer@main
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         with:
           target: .
           scope: changed
           fail-mode: validated
           fail-on: high
           fail-confidence: "0.7"
-```
-
-If you are using an organization mirror, replace `vorcigernix/nano-analyzer@main` with that repo path, for example `weareaisle/nano-analyzer@main`.
-
-### Repository Setup
-
-1. Add an Actions secret named `OPENAI_API_KEY` in the target repository: `Settings` -> `Secrets and variables` -> `Actions`.
-2. Keep `fetch-depth: 0`; changed-file scans need enough Git history to diff the PR.
-3. Start with `fail-mode: never` if you want a non-blocking rollout.
-4. Switch to `fail-mode: validated` once the signal looks useful.
-5. Enable branch protection and require the `scan` job before merging.
-
-The default PR setup scans changed files, writes a job summary, uploads the full output artifact, uploads SARIF when GitHub code scanning is available, and fails only when triage-validated findings meet the configured severity and confidence thresholds. Private repositories need GitHub Code Security or GitHub Advanced Security for SARIF ingestion; when code scanning is unavailable, the action skips only the SARIF upload and keeps the artifact output.
-
-### Rollout Modes
-
-Non-blocking trial:
-
-```yaml
-with:
-  target: .
-  scope: changed
-  fail-mode: never
-```
-
-Recommended PR gate:
-
-```yaml
-with:
-  target: .
-  scope: changed
-  fail-mode: validated
-  fail-on: high
-  fail-confidence: "0.7"
 ```
 
 Stricter gate:
@@ -193,6 +191,16 @@ with:
   target: .
   scope: changed
 ```
+
+### Repository Setup
+
+1. Add `OPENAI_API_KEY` in `Settings` -> `Secrets and variables` -> `Actions`.
+2. Keep `fetch-depth: 0`; changed-file scans need enough Git history to diff the PR.
+3. Start with `fail-mode: never` if you want a non-blocking rollout.
+4. Switch to `fail-mode: validated` once the signal looks useful.
+5. Enable branch protection and require the `scan` job before merging.
+
+The default PR setup scans changed files, writes a job summary, uploads the full output artifact, uploads SARIF when GitHub code scanning is available, and fails only when triage-validated findings meet the configured severity and confidence thresholds. Private repositories need GitHub Code Security or GitHub Advanced Security for SARIF ingestion; when code scanning is unavailable, the action skips only the SARIF upload and keeps the artifact output.
 
 GitHub does not expose repository secrets to untrusted fork PRs in normal `pull_request` workflows. Keep this workflow on `pull_request`; do not switch it to `pull_request_target` unless you have a separate design that prevents forked code from accessing secrets.
 
