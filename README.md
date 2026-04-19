@@ -14,7 +14,7 @@ Nano-analyzer is a Go CLI that sends source code through a three-stage LLM pipel
 2. **Vulnerability scan**: the scanner model uses that context to hunt for zero-day bugs function by function and output structured findings.
 3. **Skeptical triage**: each finding is challenged over multiple rounds by a reviewer that can grep the codebase for evidence. An arbiter makes the final call.
 
-Results are saved as Markdown, JSON, and SARIF files for human and CI review. The original `scan.py` prototype remains in this repo as a reference, but the production path is the Go implementation.
+Results are saved as Markdown, JSON, and SARIF files for human and CI review. This Go implementation is a fork of the original single-file Python scanner (`scan.py`), which remains in this repo as a reference.
 
 ## Current Limitations
 
@@ -35,7 +35,7 @@ Results are saved as Markdown, JSON, and SARIF files for human and CI review. Th
 ### Run From Source
 
 ```bash
-git clone https://github.com/weareaisle/nano-analyzer.git
+git clone https://github.com/vorcigernix/nano-analyzer.git
 cd nano-analyzer
 go run ./cmd/nano-analyzer scan --help
 ```
@@ -104,7 +104,9 @@ go run ./cmd/nano-analyzer scan --fail-mode validated --fail-on high --fail-conf
 
 ## GitHub Actions
 
-Use the bundled composite action to build from source and run in CI:
+Use the bundled composite action to scan pull requests as part of your GitHub flow. Add this file to the repository you want to protect:
+
+`.github/workflows/nano-analyzer.yml`
 
 ```yaml
 name: nano-analyzer
@@ -124,7 +126,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: weareaisle/nano-analyzer@main
+      - uses: vorcigernix/nano-analyzer@main
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         with:
@@ -135,7 +137,64 @@ jobs:
           fail-confidence: "0.7"
 ```
 
-The action defaults to changed-file PR scans, writes a job summary, uploads the full output artifact, uploads SARIF when available, and fails only when triage-validated findings meet the configured severity/confidence thresholds.
+If you are using an organization mirror, replace `vorcigernix/nano-analyzer@main` with that repo path, for example `weareaisle/nano-analyzer@main`.
+
+### Repository Setup
+
+1. Add an Actions secret named `OPENAI_API_KEY` in the target repository: `Settings` -> `Secrets and variables` -> `Actions`.
+2. Keep `fetch-depth: 0`; changed-file scans need enough Git history to diff the PR.
+3. Start with `fail-mode: never` if you want a non-blocking rollout.
+4. Switch to `fail-mode: validated` once the signal looks useful.
+5. Enable branch protection and require the `scan` job before merging.
+
+The default PR setup scans changed files, writes a job summary, uploads the full output artifact, uploads SARIF when available, and fails only when triage-validated findings meet the configured severity and confidence thresholds.
+
+### Rollout Modes
+
+Non-blocking trial:
+
+```yaml
+with:
+  target: .
+  scope: changed
+  fail-mode: never
+```
+
+Recommended PR gate:
+
+```yaml
+with:
+  target: .
+  scope: changed
+  fail-mode: validated
+  fail-on: high
+  fail-confidence: "0.7"
+```
+
+Stricter gate:
+
+```yaml
+with:
+  target: .
+  scope: changed
+  fail-mode: validated
+  fail-on: medium
+  fail-confidence: "0.8"
+```
+
+OpenRouter example:
+
+```yaml
+env:
+  OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+with:
+  provider: openrouter
+  model: qwen/qwen3-32b
+  target: .
+  scope: changed
+```
+
+GitHub does not expose repository secrets to untrusted fork PRs in normal `pull_request` workflows. Keep this workflow on `pull_request`; do not switch it to `pull_request_target` unless you have a separate design that prevents forked code from accessing secrets.
 
 ## Output
 
