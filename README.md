@@ -147,7 +147,7 @@ If you are using an organization mirror, replace `vorcigernix/nano-analyzer@main
 4. Switch to `fail-mode: validated` once the signal looks useful.
 5. Enable branch protection and require the `scan` job before merging.
 
-The default PR setup scans changed files, writes a job summary, uploads the full output artifact, uploads SARIF when available, and fails only when triage-validated findings meet the configured severity and confidence thresholds.
+The default PR setup scans changed files, writes a job summary, uploads the full output artifact, uploads SARIF when GitHub code scanning is available, and fails only when triage-validated findings meet the configured severity and confidence thresholds. Private repositories need GitHub Code Security or GitHub Advanced Security for SARIF ingestion; when code scanning is unavailable, the action skips only the SARIF upload and keeps the artifact output.
 
 ### Rollout Modes
 
