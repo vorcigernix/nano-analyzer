@@ -9,7 +9,7 @@ inputs:
   model:
     description: Model for context, scan, and triage stages.
     required: false
-    default: gpt-5-nano
+    default: gpt-4o-mini
   provider:
     description: Provider selection, one of auto, openai, openrouter.
     required: false

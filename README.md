@@ -43,7 +43,7 @@ go run ./cmd/nano-analyzer scan --help
 ### API Keys
 
 ```bash
-# For OpenAI models, such as "gpt-5-nano":
+# For OpenAI models, such as "gpt-4o-mini":
 export OPENAI_API_KEY=sk-...
 
 # For OpenRouter models, such as "qwen/qwen3-32b":
@@ -82,7 +82,7 @@ go run ./cmd/nano-analyzer scan --fail-mode validated --fail-on high --fail-conf
 | Flag | Default | Description |
 |------|---------|-------------|
 | `path...` | `.` | One or more files/directories to scan |
-| `--model` | `gpt-5-nano` | Model for context, scan, and triage stages |
+| `--model` | `gpt-4o-mini` | Model for context, scan, and triage stages |
 | `--provider` | `auto` | `auto`, `openai`, or `openrouter` |
 | `--format` | `json,markdown,sarif` | Output formats to write |
 | `--parallel` | `50` | Max concurrent scan calls |
@@ -144,6 +144,8 @@ If you are using an organization mirror, replace only the `uses:` line:
 ```
 
 The action downloads a release binary by default and falls back to building from source if no matching binary is available. To force one behavior, set `install-mode` to `binary` or `source`.
+
+The default OpenAI model is `gpt-4o-mini` for compatibility with more API projects. If your project has GPT-5 access, set `model` explicitly.
 
 ### Common Options
 

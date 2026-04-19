@@ -40,7 +40,7 @@ OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
 
 VERSION = "0.1"
 
-DEFAULT_MODEL = "gpt-5-nano"
+DEFAULT_MODEL = "gpt-4o-mini"
 DEFAULT_PARALLEL = 50
 DEFAULT_MAX_CHARS = 200_000
 DEFAULT_EXTENSIONS = {
