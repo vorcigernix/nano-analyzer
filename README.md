@@ -4,120 +4,151 @@
 
 ![aisle-nano-analyzer-diagram](aisle-nano-analyzer.png)
 
-> **Research prototype for demonstration purposes.** This is a simple, single-file harness that is able to detect real zero-day vulnerabilities. Note that it is a prototype, biased towards C/C++ memory safety bugs, and will produce false positives. We are sharing it as-is in the spirit of open research — expect sharp corners.
+> **Research prototype for demonstration purposes.** This tool can detect real zero-day vulnerabilities, but it is still biased toward C/C++ memory safety bugs and will produce false positives. Always verify results manually.
 
-## What it does
+## What It Does
 
-Nano-analyzer is a simple single-file Python scanner that sends source code through a three-stage LLM pipeline:
+Nano-analyzer is a Go CLI that sends source code through a three-stage LLM pipeline:
 
-1. **Context generation** — a model writes a security briefing about the file: what it does, where untrusted data flows, which buffers exist and how big they are.
-2. **Vulnerability scan** — the same model, primed with the context, hunts for zero-day bugs function by function and outputs structured findings.
-3. **Skeptical triage** — each finding is challenged over multiple rounds by a skeptical reviewer that can grep the codebase to verify (or refute) defenses. An arbiter makes the final call.
+1. **Context generation**: a model writes a security briefing about the file, including untrusted data flow and fixed-size buffers.
+2. **Vulnerability scan**: the scanner model uses that context to hunt for zero-day bugs function by function and output structured findings.
+3. **Skeptical triage**: each finding is challenged over multiple rounds by a reviewer that can grep the codebase for evidence. An arbiter makes the final call.
 
-Results are saved as Markdown and JSON files for human review.
+Results are saved as Markdown, JSON, and SARIF files for human and CI review. The original `scan.py` prototype remains in this repo as a reference, but the production path is the Go implementation.
 
-## Current limitations
+## Current Limitations
 
-This is a v0.1 prototype. Please keep the following in mind:
-
-- **C/C++ bias.** The prompts, few-shot examples, and heuristics are heavily tuned for C/C++ memory safety vulnerabilities (buffer overflows, NULL derefs, integer overflows, type confusion). It will scan other languages but is much less effective there.
-- **False positives.** Even with multi-round triage, expect findings that don't hold up on closer inspection. Always verify manually.
-- **False negatives.** The scanner can miss entire vulnerability classes — logic bugs, race conditions, cryptographic issues, authentication bypasses, etc. A clean scan does not mean the code is safe.
-- **Single-file analysis.** Each file is scanned independently. Cross-file vulnerabilities that depend on interactions between compilation units will likely be missed.
-- **LLM-dependent.** Results vary with the model used. Different models will find different things and hallucinate different false positives.
+- **C/C++ bias.** Prompts, examples, and heuristics are tuned for C/C++ memory safety bugs. Other languages can be scanned, but results are less reliable.
+- **False positives.** Even with triage, expect findings that do not hold up under manual review.
+- **False negatives.** A clean scan does not mean the code is safe.
+- **Mostly single-file analysis.** Files are scanned independently, with grep-assisted triage for cross-file evidence. Deeper cross-file bugs can still be missed.
+- **LLM-dependent.** Different models will find different issues and hallucinate different false positives.
 
 ## Setup
 
 ### Requirements
 
-- Python 3.8+
-- An OpenAI API key (for OpenAI models) or an OpenRouter API key (for other providers)
+- Go 1.22+
+- An OpenAI API key or an OpenRouter API key
 - Optional: [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) for triage grep lookups
-- Optional: [Google codesearch](https://github.com/google/codesearch) (`csearch`/`cindex`) for faster grep on large repos
 
-### Install
+### Run From Source
 
 ```bash
 git clone https://github.com/weareaisle/nano-analyzer.git
 cd nano-analyzer
-# No dependency installation needed. Run directly:
-python3 scan.py --help
+go run ./cmd/nano-analyzer scan --help
 ```
 
-### API keys
-
-Set your API key as an environment variable:
+### API Keys
 
 ```bash
-# For OpenAI models (model names without a slash, e.g. "gpt-5.4-nano"):
+# For OpenAI models, such as "gpt-5.4-nano":
 export OPENAI_API_KEY=sk-...
 
-# For OpenRouter models (model names with a slash, e.g. "qwen/qwen3-32b"):
+# For OpenRouter models, such as "qwen/qwen3-32b":
 export OPENROUTER_API_KEY=sk-or-...
 ```
 
-The scanner determines which key to use based on the model name: if it contains a `/`, it routes through OpenRouter; otherwise it uses the OpenAI API directly.
+By default the scanner determines which key to use from the model name: models containing `/` route through OpenRouter; other models route through OpenAI. Override this with `--provider openai` or `--provider openrouter`.
 
 ## Usage
 
-### Basic scan
-
 ```bash
 # Scan a single file
-python3 scan.py ./path/to/file.c
+go run ./cmd/nano-analyzer scan ./path/to/file.c
 
 # Scan a directory recursively
-python3 scan.py ./path/to/src/
-```
+go run ./cmd/nano-analyzer scan ./path/to/src/
 
-### Common options
-
-```bash
 # Use a different model
-python3 scan.py ./src --model gpt-5.4
+go run ./cmd/nano-analyzer scan --model gpt-5.4 ./src
 
 # Control parallelism
-python3 scan.py ./src --parallel 30
+go run ./cmd/nano-analyzer scan --parallel 30 ./src
 
-# Point triage grep at the full repo root (useful when scanning a subdirectory)
-python3 scan.py ./lib/crypto/ --repo-dir ./
+# Point triage grep at the full repo root
+go run ./cmd/nano-analyzer scan --repo-dir ./ ./lib/crypto/
 
-# Only surface high-confidence findings
-python3 scan.py ./src --min-confidence 0.7
+# Only surface high-confidence survivors
+go run ./cmd/nano-analyzer scan --min-confidence 0.7 ./src
 
-# More triage rounds for higher accuracy (default: 5)
-python3 scan.py ./src --triage-rounds 7
+# Fail locally on validated high-or-above findings with at least 70% confidence
+go run ./cmd/nano-analyzer scan --fail-mode validated --fail-on high --fail-confidence 0.7 ./src
 ```
 
-### All flags
+### Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `path` | *(required)* | File or directory to scan |
-| `--model` | `gpt-5.4-nano` | Model for all stages (context, scan, triage) |
-| `--parallel` | `50` | Max concurrent scan API calls |
+| `path...` | `.` | One or more files/directories to scan |
+| `--model` | `gpt-5.4-nano` | Model for context, scan, and triage stages |
+| `--provider` | `auto` | `auto`, `openai`, or `openrouter` |
+| `--format` | `json,markdown,sarif` | Output formats to write |
+| `--parallel` | `50` | Max concurrent scan calls |
+| `--max-connections` | `parallel + triage-parallel` | Total API call cap |
+| `--scope` | `all` | `all` or `changed`; `changed` uses GitHub event metadata plus `git diff` |
+| `--triage` | `enabled` | `enabled` or `disabled` |
 | `--triage-threshold` | `medium` | Triage findings at or above this severity |
 | `--triage-rounds` | `5` | Triage rounds per finding |
-| `--triage-parallel` | `50` | Max concurrent triage API calls |
-| `--max-connections` | `parallel + triage-parallel` | Total API call cap |
-| `--min-confidence` | `0.0` | Only show findings above this confidence (0.0–1.0) |
+| `--triage-parallel` | `50` | Max concurrent triage findings |
+| `--min-confidence` | `0.0` | Only write survivor findings above this confidence |
+| `--fail-mode` | `never` | `never`, `validated`, or `raw` |
+| `--fail-on` | `high` | Fail on findings at or above this severity when fail mode applies |
+| `--fail-confidence` | `0.7` | Minimum validated confidence required to fail |
 | `--project` | directory name | Project name used in triage prompts |
-| `--repo-dir` | auto | Repo root for grep lookups (auto: parent dir for files, scan dir for folders) |
+| `--repo-dir` | auto | Repo root for grep and changed-file lookups |
 | `--output-dir` | `~/nano-analyzer-results/<timestamp>/` | Where to save results |
 | `--max-chars` | `200,000` | Skip files larger than this |
-| `--verbose-triage` | off | Show per-round triage progress |
+| `--verbose-triage` | off | Show extra triage progress |
+
+## GitHub Actions
+
+Use the bundled composite action to build from source and run in CI:
+
+```yaml
+name: nano-analyzer
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: weareaisle/nano-analyzer@main
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        with:
+          target: .
+          scope: changed
+          fail-mode: validated
+          fail-on: high
+          fail-confidence: "0.7"
+```
+
+The action defaults to changed-file PR scans, writes a job summary, uploads the full output artifact, uploads SARIF when available, and fails only when triage-validated findings meet the configured severity/confidence thresholds.
 
 ## Output
 
-Results are saved to `~/nano-analyzer-results/<timestamp>/` (or `--output-dir`):
+Results are saved to `~/nano-analyzer-results/<timestamp>/` or `--output-dir`:
 
-```
+```text
 <timestamp>/
 ├── summary.json              # machine-readable scan summary
 ├── summary.md                # human-readable scan summary
-├── <filename>.md             # raw scanner output per file
-├── <filename>.context.md     # context briefing per file
-├── <filename>.json           # full result data per file
+├── results.sarif             # GitHub code scanning output
+├── reports/                  # raw scanner output per file
+├── contexts/                 # context briefing per file
+├── results/                  # full result JSON per file
 ├── triages/                  # detailed triage reasoning
 │   └── T0001_<file>_<title>.md
 ├── findings/                 # findings that survived triage
@@ -126,16 +157,16 @@ Results are saved to `~/nano-analyzer-results/<timestamp>/` (or `--output-dir`):
 └── triage_survivors.md       # summary of validated findings
 ```
 
-## How triage works
+## How Triage Works
 
-When a scan finds a medium-or-above severity issue, the triage pipeline kicks in:
+When a scan finds a medium-or-above severity issue by default:
 
-1. A skeptical reviewer examines the finding against the actual code and can **grep the codebase** to verify or refute claimed defenses.
-2. This repeats for multiple rounds (default: 5), with each reviewer seeing prior arguments and encouraged to find *new* evidence rather than rehash old points.
-3. A final **arbiter** reads all rounds and makes a VALID/INVALID call.
-4. The confidence score (e.g. 80% \[VVIVV→V\]) reflects the fraction of rounds that said VALID.
+1. A skeptical reviewer examines the finding against the actual code and can grep the codebase to verify or refute defenses.
+2. This repeats for multiple rounds, with each reviewer seeing prior arguments.
+3. A final arbiter reads the rounds and makes a VALID/INVALID call.
+4. The confidence score reflects the fraction of rounds that said VALID.
 
-Findings that survive triage are written to the `findings/` directory with full reasoning chains.
+Findings that survive triage are written to the `findings/` directory with the reasoning chain.
 
 ## Disclaimer
 

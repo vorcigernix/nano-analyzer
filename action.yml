@@ -1,0 +1,206 @@
+name: nano-analyzer
+description: LLM-powered vulnerability scanning with triage-validated CI failure policy.
+
+inputs:
+  target:
+    description: Path or newline-separated paths to scan.
+    required: false
+    default: "."
+  model:
+    description: Model for context, scan, and triage stages.
+    required: false
+    default: gpt-5.4-nano
+  provider:
+    description: Provider selection, one of auto, openai, openrouter.
+    required: false
+    default: auto
+  output-dir:
+    description: Output directory. Defaults to a runner temp directory.
+    required: false
+    default: ""
+  format:
+    description: Comma-separated outputs, such as json,markdown,sarif.
+    required: false
+    default: json,markdown,sarif
+  scope:
+    description: Scan scope, one of changed or all.
+    required: false
+    default: changed
+  parallel:
+    description: Maximum concurrent file scans.
+    required: false
+    default: "50"
+  max-connections:
+    description: Maximum total concurrent API calls. Empty uses parallel + triage-parallel.
+    required: false
+    default: ""
+  max-chars:
+    description: Skip files larger than this many bytes/chars.
+    required: false
+    default: "200000"
+  triage:
+    description: Triage mode, one of enabled or disabled.
+    required: false
+    default: enabled
+  triage-threshold:
+    description: Triage findings at or above this severity.
+    required: false
+    default: medium
+  triage-rounds:
+    description: Triage rounds per finding.
+    required: false
+    default: "5"
+  triage-parallel:
+    description: Maximum concurrent triage findings.
+    required: false
+    default: "50"
+  min-confidence:
+    description: Minimum confidence for survivor reporting.
+    required: false
+    default: "0"
+  fail-mode:
+    description: Failure mode, one of validated, raw, never.
+    required: false
+    default: validated
+  fail-on:
+    description: Fail on findings at or above this severity.
+    required: false
+    default: high
+  fail-confidence:
+    description: Minimum validated confidence required to fail.
+    required: false
+    default: "0.7"
+  project:
+    description: Project name used in triage prompts.
+    required: false
+    default: ""
+  repo-dir:
+    description: Repository root for grep and changed-file lookups.
+    required: false
+    default: "."
+  upload-artifact:
+    description: Upload full analyzer output as a workflow artifact.
+    required: false
+    default: "true"
+  upload-sarif:
+    description: Upload results.sarif to GitHub code scanning.
+    required: false
+    default: "true"
+
+outputs:
+  output-dir:
+    description: Directory containing analyzer output.
+    value: ${{ steps.scan.outputs['output-dir'] }}
+  exit-code:
+    description: nano-analyzer exit code.
+    value: ${{ steps.scan.outputs['exit-code'] }}
+  sarif-file:
+    description: SARIF output path when generated.
+    value: ${{ steps.scan.outputs['sarif-file'] }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: ${{ github.action_path }}/go.mod
+
+    - name: Build nano-analyzer
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p "$RUNNER_TEMP/nano-analyzer-bin"
+        cd "$GITHUB_ACTION_PATH"
+        go build -o "$RUNNER_TEMP/nano-analyzer-bin/nano-analyzer" ./cmd/nano-analyzer
+
+    - name: Run nano-analyzer
+      id: scan
+      shell: bash
+      env:
+        INPUT_TARGET: ${{ inputs.target }}
+        INPUT_MODEL: ${{ inputs.model }}
+        INPUT_PROVIDER: ${{ inputs.provider }}
+        INPUT_OUTPUT_DIR: ${{ inputs.output-dir }}
+        INPUT_FORMAT: ${{ inputs.format }}
+        INPUT_SCOPE: ${{ inputs.scope }}
+        INPUT_PARALLEL: ${{ inputs.parallel }}
+        INPUT_MAX_CONNECTIONS: ${{ inputs.max-connections }}
+        INPUT_MAX_CHARS: ${{ inputs.max-chars }}
+        INPUT_TRIAGE: ${{ inputs.triage }}
+        INPUT_TRIAGE_THRESHOLD: ${{ inputs.triage-threshold }}
+        INPUT_TRIAGE_ROUNDS: ${{ inputs.triage-rounds }}
+        INPUT_TRIAGE_PARALLEL: ${{ inputs.triage-parallel }}
+        INPUT_MIN_CONFIDENCE: ${{ inputs.min-confidence }}
+        INPUT_FAIL_MODE: ${{ inputs.fail-mode }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_FAIL_CONFIDENCE: ${{ inputs.fail-confidence }}
+        INPUT_REPO_DIR: ${{ inputs.repo-dir }}
+        INPUT_PROJECT: ${{ inputs.project }}
+      run: |
+        set -euo pipefail
+        out="$INPUT_OUTPUT_DIR"
+        if [[ -z "$out" ]]; then
+          out="$RUNNER_TEMP/nano-analyzer-results"
+        fi
+
+        cmd=(
+          "$RUNNER_TEMP/nano-analyzer-bin/nano-analyzer" scan
+          --model "$INPUT_MODEL"
+          --provider "$INPUT_PROVIDER"
+          --output-dir "$out"
+          --format "$INPUT_FORMAT"
+          --scope "$INPUT_SCOPE"
+          --parallel "$INPUT_PARALLEL"
+          --max-chars "$INPUT_MAX_CHARS"
+          --triage "$INPUT_TRIAGE"
+          --triage-threshold "$INPUT_TRIAGE_THRESHOLD"
+          --triage-rounds "$INPUT_TRIAGE_ROUNDS"
+          --triage-parallel "$INPUT_TRIAGE_PARALLEL"
+          --min-confidence "$INPUT_MIN_CONFIDENCE"
+          --fail-mode "$INPUT_FAIL_MODE"
+          --fail-on "$INPUT_FAIL_ON"
+          --fail-confidence "$INPUT_FAIL_CONFIDENCE"
+          --repo-dir "$INPUT_REPO_DIR"
+        )
+        if [[ -n "$INPUT_MAX_CONNECTIONS" ]]; then
+          cmd+=(--max-connections "$INPUT_MAX_CONNECTIONS")
+        fi
+        if [[ -n "$INPUT_PROJECT" ]]; then
+          cmd+=(--project "$INPUT_PROJECT")
+        fi
+        while IFS= read -r target; do
+          [[ -n "$target" ]] && cmd+=("$target")
+        done <<< "$INPUT_TARGET"
+
+        set +e
+        "${cmd[@]}"
+        status=$?
+        set -e
+        echo "output-dir=$out" >> "$GITHUB_OUTPUT"
+        echo "exit-code=$status" >> "$GITHUB_OUTPUT"
+        echo "sarif-file=$out/results.sarif" >> "$GITHUB_OUTPUT"
+        if [[ -f "$out/results.sarif" ]]; then
+          echo "sarif-exists=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "sarif-exists=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Upload nano-analyzer artifact
+      if: ${{ always() && inputs.upload-artifact == 'true' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: nano-analyzer-results
+        path: ${{ steps.scan.outputs['output-dir'] }}
+        if-no-files-found: ignore
+
+    - name: Upload SARIF
+      if: ${{ always() && inputs.upload-sarif == 'true' && steps.scan.outputs['sarif-exists'] == 'true' }}
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ steps.scan.outputs['sarif-file'] }}
+
+    - name: Fail on analyzer policy
+      if: ${{ steps.scan.outputs['exit-code'] != '0' }}
+      shell: bash
+      run: exit "${{ steps.scan.outputs['exit-code'] }}"
