@@ -4,7 +4,7 @@ import "testing"
 
 func TestResolveBackendAutoOpenAI(t *testing.T) {
 	client := NewClient("auto", 1, WithKeys("openai-key", "router-key"))
-	backend, err := client.ResolveBackend("gpt-5.4-nano")
+	backend, err := client.ResolveBackend("gpt-5-nano")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +26,7 @@ func TestResolveBackendAutoOpenRouter(t *testing.T) {
 
 func TestResolveBackendMissingKey(t *testing.T) {
 	client := NewClient("openai", 1, WithKeys("", "router-key"))
-	if _, err := client.ResolveBackend("gpt-5.4-nano"); err == nil {
+	if _, err := client.ResolveBackend("gpt-5-nano"); err == nil {
 		t.Fatal("expected missing key error")
 	}
 }

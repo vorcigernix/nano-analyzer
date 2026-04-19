@@ -43,7 +43,7 @@ go run ./cmd/nano-analyzer scan --help
 ### API Keys
 
 ```bash
-# For OpenAI models, such as "gpt-5.4-nano":
+# For OpenAI models, such as "gpt-5-nano":
 export OPENAI_API_KEY=sk-...
 
 # For OpenRouter models, such as "qwen/qwen3-32b":
@@ -82,7 +82,7 @@ go run ./cmd/nano-analyzer scan --fail-mode validated --fail-on high --fail-conf
 | Flag | Default | Description |
 |------|---------|-------------|
 | `path...` | `.` | One or more files/directories to scan |
-| `--model` | `gpt-5.4-nano` | Model for context, scan, and triage stages |
+| `--model` | `gpt-5-nano` | Model for context, scan, and triage stages |
 | `--provider` | `auto` | `auto`, `openai`, or `openrouter` |
 | `--format` | `json,markdown,sarif` | Output formats to write |
 | `--parallel` | `50` | Max concurrent scan calls |
@@ -143,6 +143,8 @@ If you are using an organization mirror, replace only the `uses:` line:
       - uses: weareaisle/nano-analyzer@main
 ```
 
+The action downloads a release binary by default and falls back to building from source if no matching binary is available. To force one behavior, set `install-mode` to `binary` or `source`.
+
 ### Common Options
 
 Non-blocking trial:
@@ -167,6 +169,16 @@ Explicit PR gate:
           fail-mode: validated
           fail-on: high
           fail-confidence: "0.7"
+```
+
+Use a different OpenAI model:
+
+```yaml
+      - uses: vorcigernix/nano-analyzer@main
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        with:
+          model: gpt-5
 ```
 
 Stricter gate:
