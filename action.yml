@@ -87,7 +87,7 @@ inputs:
     required: false
     default: "."
   upload-artifact:
-    description: Upload full analyzer output as a workflow artifact. Skipped when SARIF upload is unavailable and PR comment fallback runs.
+    description: Upload full analyzer output as a workflow artifact. Skipped only when the PR comment fallback posts successfully.
     required: false
     default: "true"
   upload-sarif:
@@ -322,6 +322,7 @@ runs:
         sarif_file: ${{ steps.scan.outputs['sarif-file'] }}
 
     - name: Comment PR with analyzer results
+      id: pr_comment
       if: ${{ always() && (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && (inputs.pr-comment == 'always' || (inputs.pr-comment != 'false' && steps.sarif_upload.outputs.available == 'false')) }}
       uses: actions/github-script@v7
       env:
@@ -331,6 +332,7 @@ runs:
         NANO_ANALYZER_SARIF_AVAILABLE: ${{ steps.sarif_upload.outputs.available }}
       with:
         github-token: ${{ github.token }}
+        result-encoding: string
         script: |
           const fs = require('fs');
           const path = require('path');
@@ -395,10 +397,12 @@ runs:
             }
           } catch (error) {
             core.warning(`Unable to post nano-analyzer PR comment: ${error.message}`);
+            return 'failed';
           }
+          return 'posted';
 
     - name: Upload nano-analyzer artifact
-      if: ${{ always() && inputs.upload-artifact == 'true' && (steps.sarif_upload.outputs.available != 'false' || inputs.pr-comment == 'false' || (github.event_name != 'pull_request' && github.event_name != 'pull_request_target')) }}
+      if: ${{ always() && inputs.upload-artifact == 'true' && (steps.sarif_upload.outputs.available != 'false' || inputs.pr-comment == 'false' || steps.pr_comment.outputs.result != 'posted' || (github.event_name != 'pull_request' && github.event_name != 'pull_request_target')) }}
       uses: actions/upload-artifact@v4
       with:
         name: nano-analyzer-results
