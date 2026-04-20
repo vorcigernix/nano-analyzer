@@ -95,6 +95,9 @@ func (w *Writer) writeMarkdown(outDir string, summary domain.Summary) error {
 	if err := writeFile(filepath.Join(outDir, "summary.md"), []byte(markdownSummary(summary))); err != nil {
 		return err
 	}
+	if err := writeFile(filepath.Join(outDir, "pr-comment.md"), []byte(markdownPRComment(summary))); err != nil {
+		return err
+	}
 	for _, result := range summary.Results {
 		if result.Status != "ok" {
 			continue
@@ -197,6 +200,115 @@ func markdownTriageSurvivors(summary domain.Summary) string {
 	return b.String()
 }
 
+func markdownPRComment(summary domain.Summary) string {
+	const maxItems = 20
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "## nano-analyzer security audit\n\n")
+	fmt.Fprintf(&b, "- **Model**: `%s`\n", summary.Model)
+	fmt.Fprintf(&b, "- **Files scanned**: `%d`\n", summary.FilesScanned)
+	fmt.Fprintf(&b, "- **Files skipped**: `%d`\n", summary.FilesSkipped)
+	if summary.ErrorFiles > 0 {
+		fmt.Fprintf(&b, "- **Files with errors**: `%d`\n", summary.ErrorFiles)
+	}
+	if summary.ShouldFail {
+		fmt.Fprintf(&b, "- **Result**: failing policy threshold\n")
+	} else {
+		fmt.Fprintf(&b, "- **Result**: passing policy threshold\n")
+	}
+
+	fmt.Fprintf(&b, "\n| File | Critical | High | Medium | Low | Status |\n")
+	fmt.Fprintf(&b, "|------|----------|------|--------|-----|--------|\n")
+	for _, result := range summary.Results {
+		s := result.Severities
+		fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %s |\n",
+			markdownTableCell(result.DisplayName),
+			s[domain.SeverityCritical],
+			s[domain.SeverityHigh],
+			s[domain.SeverityMedium],
+			s[domain.SeverityLow],
+			markdownTableCell(result.Status),
+		)
+	}
+
+	valid := validSurvivors(summary)
+	if len(valid) > 0 {
+		fmt.Fprintf(&b, "\n### Validated Findings\n\n")
+		for idx, triage := range valid {
+			if idx >= maxItems {
+				fmt.Fprintf(&b, "_%d more validated finding(s) omitted from this comment._\n\n", len(valid)-idx)
+				break
+			}
+			fmt.Fprintf(&b, "#### %s\n\n", triage.FindingTitle)
+			fmt.Fprintf(&b, "- **File**: `%s`\n", triage.File)
+			fmt.Fprintf(&b, "- **Severity**: `%s`\n", triage.Finding.Severity)
+			fmt.Fprintf(&b, "- **Confidence**: `%.0f%% [%s]`\n\n", triage.Confidence*100, triage.Verdicts)
+			body := strings.TrimSpace(triage.Finding.Description)
+			if body == "" {
+				body = strings.TrimSpace(triage.Finding.Body)
+			}
+			if body != "" {
+				fmt.Fprintf(&b, "%s\n\n", truncateMarkdown(body, 1200))
+			}
+			reasoning := strings.TrimSpace(triage.Reasoning)
+			if reasoning != "" {
+				fmt.Fprintf(&b, "<details><summary>Triage reasoning</summary>\n\n%s\n\n</details>\n\n", truncateMarkdown(reasoning, 1800))
+			}
+		}
+		return b.String()
+	}
+
+	raw := rawFindings(summary)
+	if len(raw) > 0 {
+		fmt.Fprintf(&b, "\n### Raw Findings\n\n")
+		if len(summary.Triage) > 0 {
+			fmt.Fprintf(&b, "_No findings survived triage; raw scanner findings are listed for visibility._\n\n")
+		} else {
+			fmt.Fprintf(&b, "_Triage did not run; these findings are unvalidated._\n\n")
+		}
+		for idx, item := range raw {
+			if idx >= maxItems {
+				fmt.Fprintf(&b, "_%d more raw finding(s) omitted from this comment._\n\n", len(raw)-idx)
+				break
+			}
+			fmt.Fprintf(&b, "#### %s\n\n", item.Finding.Title)
+			fmt.Fprintf(&b, "- **File**: `%s`\n", item.File)
+			fmt.Fprintf(&b, "- **Severity**: `%s`\n", item.Finding.Severity)
+			if item.Finding.Function != "" {
+				fmt.Fprintf(&b, "- **Function**: `%s`\n", item.Finding.Function)
+			}
+			body := strings.TrimSpace(item.Finding.Description)
+			if body == "" {
+				body = strings.TrimSpace(item.Finding.Body)
+			}
+			if body != "" {
+				fmt.Fprintf(&b, "\n%s\n\n", truncateMarkdown(body, 1200))
+			} else {
+				fmt.Fprintf(&b, "\n")
+			}
+		}
+		return b.String()
+	}
+
+	if summary.ErrorFiles > 0 {
+		fmt.Fprintf(&b, "\n### Scan Errors\n\n")
+		for _, result := range summary.Results {
+			if result.Status != "error" {
+				continue
+			}
+			message := strings.TrimSpace(result.Error)
+			if message == "" {
+				message = "scan failed"
+			}
+			fmt.Fprintf(&b, "- `%s`: %s\n", result.DisplayName, truncateMarkdown(message, 500))
+		}
+		return b.String()
+	}
+
+	fmt.Fprintf(&b, "\nNo findings were reported.\n")
+	return b.String()
+}
+
 func markdownTriageDetail(idx int, triage domain.TriageResult) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Triage T%04d: %s\n\n", idx, triage.FindingTitle)
@@ -244,6 +356,56 @@ func validSurvivors(summary domain.Summary) []domain.TriageResult {
 		return survivors[i].File < survivors[j].File
 	})
 	return survivors
+}
+
+type rawFinding struct {
+	File    string
+	Finding domain.Finding
+}
+
+func rawFindings(summary domain.Summary) []rawFinding {
+	var findings []rawFinding
+	for _, result := range summary.Results {
+		if result.Status != "ok" {
+			continue
+		}
+		for _, finding := range result.Findings {
+			findings = append(findings, rawFinding{File: result.DisplayName, Finding: finding})
+		}
+	}
+	sort.SliceStable(findings, func(i, j int) bool {
+		left := domain.SeverityRank(findings[i].Finding.Severity)
+		right := domain.SeverityRank(findings[j].Finding.Severity)
+		if left != right {
+			return left < right
+		}
+		if findings[i].File != findings[j].File {
+			return findings[i].File < findings[j].File
+		}
+		return findings[i].Finding.Title < findings[j].Finding.Title
+	})
+	return findings
+}
+
+func markdownTableCell(value string) string {
+	value = strings.ReplaceAll(value, "\n", " ")
+	value = strings.ReplaceAll(value, "|", "\\|")
+	return strings.TrimSpace(value)
+}
+
+func truncateMarkdown(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if limit <= 0 {
+		return value
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	if limit < 20 {
+		return strings.TrimSpace(string(runes[:limit]))
+	}
+	return strings.TrimSpace(string(runes[:limit-15])) + "\n\n_[truncated]_"
 }
 
 func appendGitHubSummary(path string, summary domain.Summary) error {

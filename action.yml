@@ -87,13 +87,17 @@ inputs:
     required: false
     default: "."
   upload-artifact:
-    description: Upload full analyzer output as a workflow artifact.
+    description: Upload full analyzer output as a workflow artifact. Skipped when SARIF upload is unavailable and PR comment fallback runs.
     required: false
     default: "true"
   upload-sarif:
     description: Upload results.sarif to GitHub code scanning.
     required: false
     default: "true"
+  pr-comment:
+    description: PR comment mode, one of fallback, always, false. Fallback comments only when SARIF upload is unavailable.
+    required: false
+    default: fallback
 
 outputs:
   output-dir:
@@ -105,6 +109,9 @@ outputs:
   sarif-file:
     description: SARIF output path when generated.
     value: ${{ steps.scan.outputs['sarif-file'] }}
+  pr-comment-file:
+    description: Markdown file used for PR comment fallback when generated.
+    value: ${{ steps.scan.outputs['pr-comment-file'] }}
 
 runs:
   using: composite
@@ -262,19 +269,12 @@ runs:
         echo "output-dir=$out" >> "$GITHUB_OUTPUT"
         echo "exit-code=$status" >> "$GITHUB_OUTPUT"
         echo "sarif-file=$out/results.sarif" >> "$GITHUB_OUTPUT"
+        echo "pr-comment-file=$out/pr-comment.md" >> "$GITHUB_OUTPUT"
         if [[ -f "$out/results.sarif" ]]; then
           echo "sarif-exists=true" >> "$GITHUB_OUTPUT"
         else
           echo "sarif-exists=false" >> "$GITHUB_OUTPUT"
         fi
-
-    - name: Upload nano-analyzer artifact
-      if: ${{ always() && inputs.upload-artifact == 'true' }}
-      uses: actions/upload-artifact@v4
-      with:
-        name: nano-analyzer-results
-        path: ${{ steps.scan.outputs['output-dir'] }}
-        if-no-files-found: ignore
 
     - name: Check SARIF upload availability
       id: sarif_upload
@@ -320,6 +320,90 @@ runs:
       uses: github/codeql-action/upload-sarif@v3
       with:
         sarif_file: ${{ steps.scan.outputs['sarif-file'] }}
+
+    - name: Comment PR with analyzer results
+      if: ${{ always() && (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && (inputs.pr-comment == 'always' || (inputs.pr-comment != 'false' && steps.sarif_upload.outputs.available == 'false')) }}
+      uses: actions/github-script@v7
+      env:
+        NANO_ANALYZER_OUTPUT_DIR: ${{ steps.scan.outputs['output-dir'] }}
+        NANO_ANALYZER_COMMENT_FILE: ${{ steps.scan.outputs['pr-comment-file'] }}
+        NANO_ANALYZER_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        NANO_ANALYZER_SARIF_AVAILABLE: ${{ steps.sarif_upload.outputs.available }}
+      with:
+        github-token: ${{ github.token }}
+        script: |
+          const fs = require('fs');
+          const path = require('path');
+
+          const marker = '<!-- nano-analyzer-pr-comment -->';
+          const outputDir = process.env.NANO_ANALYZER_OUTPUT_DIR || '';
+          const candidates = [
+            process.env.NANO_ANALYZER_COMMENT_FILE,
+            outputDir ? path.join(outputDir, 'summary.md') : '',
+          ].filter(Boolean);
+
+          let body = '';
+          for (const candidate of candidates) {
+            if (fs.existsSync(candidate)) {
+              body = fs.readFileSync(candidate, 'utf8');
+              break;
+            }
+          }
+          if (!body.trim()) {
+            body = '## nano-analyzer security audit\n\nNo analyzer output file was produced.';
+          }
+
+          const sarifAvailable = process.env.NANO_ANALYZER_SARIF_AVAILABLE;
+          let notice = '_SARIF upload did not run, so nano-analyzer posted results here._';
+          if (sarifAvailable === 'true') {
+            notice = '_SARIF was uploaded to GitHub code scanning; this comment mirrors the PR audit summary._';
+          } else if (sarifAvailable === 'false') {
+            notice = '_GitHub code scanning is unavailable for this repository, so nano-analyzer posted results here instead of uploading SARIF._';
+          }
+          let commentBody = `${marker}\n${body.trim()}\n\n${notice}\n\n[Workflow run](${process.env.NANO_ANALYZER_RUN_URL})`;
+          const maxLength = 60000;
+          if (commentBody.length > maxLength) {
+            commentBody = `${commentBody.slice(0, maxLength - 80).trim()}\n\n_[comment truncated; see the workflow run for full logs]_`;
+          }
+
+          try {
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+            const existing = comments.find((comment) =>
+              comment.user?.type === 'Bot' && comment.body?.includes(marker)
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body: commentBody,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body: commentBody,
+              });
+            }
+          } catch (error) {
+            core.warning(`Unable to post nano-analyzer PR comment: ${error.message}`);
+          }
+
+    - name: Upload nano-analyzer artifact
+      if: ${{ always() && inputs.upload-artifact == 'true' && (steps.sarif_upload.outputs.available != 'false' || inputs.pr-comment == 'false' || (github.event_name != 'pull_request' && github.event_name != 'pull_request_target')) }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: nano-analyzer-results
+        path: ${{ steps.scan.outputs['output-dir'] }}
+        if-no-files-found: ignore
 
     - name: Fail on analyzer policy
       if: ${{ steps.scan.outputs['exit-code'] != '0' }}

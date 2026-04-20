@@ -84,6 +84,7 @@ func TestRunnerEndToEndWithFakeAdapters(t *testing.T) {
 	for _, path := range []string{
 		filepath.Join(outDir, "summary.json"),
 		filepath.Join(outDir, "summary.md"),
+		filepath.Join(outDir, "pr-comment.md"),
 		filepath.Join(outDir, "results.sarif"),
 	} {
 		if _, err := os.Stat(path); err != nil {

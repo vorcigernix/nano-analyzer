@@ -121,7 +121,7 @@ on:
 permissions:
   contents: read
   security-events: write
-  actions: read
+  issues: write
 
 jobs:
   scan:
@@ -130,17 +130,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: vorcigernix/nano-analyzer@main
+      - uses: vorcigernix/nano-analyzer@v0.2.4
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 ```
 
-That is enough to scan changed files on pull requests, upload the full output artifact, upload SARIF when GitHub code scanning is available, and fail on validated high-or-above findings.
+That is enough to scan changed files on pull requests, upload SARIF when GitHub code scanning is available, post a PR comment fallback when it is not available, and fail on validated high-or-above findings. The `issues: write` permission is used only for the fallback PR comment.
 
 If you are using an organization mirror, replace only the `uses:` line:
 
 ```yaml
-      - uses: weareaisle/nano-analyzer@main
+      - uses: weareaisle/nano-analyzer@v0.2.4
 ```
 
 The action downloads a release binary by default and falls back to building from source if no matching binary is available. To force one behavior, set `install-mode` to `binary` or `source`.
@@ -152,7 +152,7 @@ The default OpenAI model is `gpt-4o-mini` for compatibility with more API projec
 Non-blocking trial:
 
 ```yaml
-      - uses: vorcigernix/nano-analyzer@main
+      - uses: vorcigernix/nano-analyzer@v0.2.4
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         with:
@@ -162,7 +162,7 @@ Non-blocking trial:
 Explicit PR gate:
 
 ```yaml
-      - uses: vorcigernix/nano-analyzer@main
+      - uses: vorcigernix/nano-analyzer@v0.2.4
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         with:
@@ -176,7 +176,7 @@ Explicit PR gate:
 Use a different OpenAI model:
 
 ```yaml
-      - uses: vorcigernix/nano-analyzer@main
+      - uses: vorcigernix/nano-analyzer@v0.2.4
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         with:
@@ -206,6 +206,20 @@ with:
   scope: changed
 ```
 
+Disable the PR comment fallback:
+
+```yaml
+with:
+  pr-comment: false
+```
+
+Always post or update the PR comment, even when SARIF upload succeeds:
+
+```yaml
+with:
+  pr-comment: always
+```
+
 ### Repository Setup
 
 1. Add `OPENAI_API_KEY` in `Settings` -> `Secrets and variables` -> `Actions`.
@@ -214,7 +228,7 @@ with:
 4. Switch to `fail-mode: validated` once the signal looks useful.
 5. Enable branch protection and require the `scan` job before merging.
 
-The default PR setup scans changed files, writes a job summary, uploads the full output artifact, uploads SARIF when GitHub code scanning is available, and fails only when triage-validated findings meet the configured severity and confidence thresholds. Private repositories need GitHub Code Security or GitHub Advanced Security for SARIF ingestion; when code scanning is unavailable, the action skips only the SARIF upload and keeps the artifact output.
+The default PR setup scans changed files, writes a job summary, uploads SARIF when GitHub code scanning is available, and fails only when triage-validated findings meet the configured severity and confidence thresholds. Private repositories need GitHub Code Security or GitHub Advanced Security for SARIF ingestion; when code scanning is unavailable, the action posts the audit result as a PR comment and skips the artifact upload.
 
 GitHub does not expose repository secrets to untrusted fork PRs in normal `pull_request` workflows. Keep this workflow on `pull_request`; do not switch it to `pull_request_target` unless you have a separate design that prevents forked code from accessing secrets.
 
@@ -226,6 +240,7 @@ Results are saved to `~/nano-analyzer-results/<timestamp>/` or `--output-dir`:
 <timestamp>/
 ├── summary.json              # machine-readable scan summary
 ├── summary.md                # human-readable scan summary
+├── pr-comment.md             # compact PR comment fallback
 ├── results.sarif             # GitHub code scanning output
 ├── reports/                  # raw scanner output per file
 ├── contexts/                 # context briefing per file

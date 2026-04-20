@@ -14,7 +14,7 @@ import (
 	"github.com/weareaisle/nano-analyzer/internal/domain"
 )
 
-const version = "0.2.3"
+const version = "0.2.4"
 
 func main() {
 	os.Exit(run(os.Args[1:]))
