@@ -227,12 +227,10 @@ func (c *Client) Chat(ctx context.Context, request ports.ChatRequest) (ports.Cha
 }
 
 func (c *Client) post(ctx context.Context, backend Backend, body []byte) (ports.ChatResponse, error) {
-	select {
-	case c.semaphore <- struct{}{}:
-		defer func() { <-c.semaphore }()
-	case <-ctx.Done():
-		return ports.ChatResponse{}, ctx.Err()
+	if err := c.acquireSlot(ctx); err != nil {
+		return ports.ChatResponse{}, err
 	}
+	defer func() { <-c.semaphore }()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, backend.URL, bytes.NewReader(body))
 	if err != nil {
@@ -364,16 +362,44 @@ func trim(value string, max int) string {
 }
 
 func (c *Client) waitForRateLimitReset(ctx context.Context) error {
-	c.stateMu.Lock()
-	wait := c.rateLimitUntil.Sub(c.now())
-	if wait <= 0 {
-		c.rateLimitUntil = time.Time{}
-	}
-	c.stateMu.Unlock()
+	wait := c.rateLimitWait()
 	if wait <= 0 {
 		return nil
 	}
 	return c.sleep(ctx, wait)
+}
+
+func (c *Client) acquireSlot(ctx context.Context) error {
+	for {
+		if err := c.waitForRateLimitReset(ctx); err != nil {
+			return err
+		}
+		select {
+		case c.semaphore <- struct{}{}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		if wait := c.rateLimitWait(); wait > 0 {
+			<-c.semaphore
+			if err := c.sleep(ctx, wait); err != nil {
+				return err
+			}
+			continue
+		}
+		return nil
+	}
+}
+
+func (c *Client) rateLimitWait() time.Duration {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+
+	wait := c.rateLimitUntil.Sub(c.now())
+	if wait <= 0 {
+		c.rateLimitUntil = time.Time{}
+		return 0
+	}
+	return wait
 }
 
 func (c *Client) noteRateLimit(status retryableStatus) time.Duration {
@@ -395,10 +421,10 @@ func (c *Client) noteRateLimit(status retryableStatus) time.Duration {
 
 	if extended && c.logf != nil {
 		c.logf(
-			"llm: rate limit hit (api %d); waiting %s until %s, then retrying",
+			"llm: rate limited (api %d); retrying at %s (%s)",
 			status.status,
-			wait.Round(time.Second),
 			until.Format("15:04:05"),
+			wait.Round(time.Second),
 		)
 	}
 	return wait

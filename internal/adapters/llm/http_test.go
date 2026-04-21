@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -102,9 +103,69 @@ func TestChatWaitsForRateLimitAndRetries(t *testing.T) {
 	if want := nextMinuteBoundary(rateLimitedAt).Sub(rateLimitedAt); sleeps[1] != want {
 		t.Fatalf("expected rate-limit sleep %s, got %#v", want, sleeps)
 	}
-	if len(logs) == 0 || !strings.Contains(logs[0], "rate limit hit") {
+	if len(logs) == 0 || !strings.Contains(logs[0], "rate limit") {
 		t.Fatalf("expected rate-limit log, got %#v", logs)
 	}
+}
+
+func TestAcquireSlotWaitsIfRateLimitAppearsWhileQueued(t *testing.T) {
+	now := time.Date(2026, 4, 21, 19, 12, 34, 0, time.UTC)
+	currentNow := now
+	var mu sync.Mutex
+	var sleeps []time.Duration
+	firstCheck := make(chan struct{})
+	firstCheckOnce := sync.Once{}
+
+	client := NewClient(
+		"openai",
+		1,
+		WithNow(func() time.Time {
+			firstCheckOnce.Do(func() { close(firstCheck) })
+			mu.Lock()
+			defer mu.Unlock()
+			return currentNow
+		}),
+		WithSleep(func(ctx context.Context, delay time.Duration) error {
+			_ = ctx
+			mu.Lock()
+			defer mu.Unlock()
+			sleeps = append(sleeps, delay)
+			currentNow = currentNow.Add(delay)
+			return nil
+		}),
+	)
+
+	client.semaphore <- struct{}{}
+	done := make(chan error, 1)
+	go func() {
+		done <- client.acquireSlot(context.Background())
+	}()
+
+	<-firstCheck
+	client.stateMu.Lock()
+	client.rateLimitUntil = nextMinuteBoundary(now)
+	client.stateMu.Unlock()
+	<-client.semaphore
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for queued acquireSlot call")
+	}
+
+	mu.Lock()
+	gotSleeps := append([]time.Duration(nil), sleeps...)
+	mu.Unlock()
+
+	wantWait := nextMinuteBoundary(now).Sub(now)
+	if len(gotSleeps) != 1 || gotSleeps[0] != wantWait {
+		t.Fatalf("expected queued caller to sleep for %s, got %#v", wantWait, gotSleeps)
+	}
+
+	<-client.semaphore
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
