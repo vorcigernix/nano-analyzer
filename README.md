@@ -14,7 +14,7 @@ Nano-analyzer is a Go CLI that sends source code through a three-stage LLM pipel
 2. **Vulnerability scan**: the scanner model uses that context to hunt for zero-day bugs function by function and output structured findings.
 3. **Skeptical triage**: each finding is challenged over multiple rounds by a reviewer that can grep the codebase for evidence. An arbiter makes the final call.
 
-Results are saved as Markdown, JSON, and SARIF files for human and CI review. This Go implementation is a fork of the original single-file Python scanner (`scan.py`), which remains in this repo as a reference.
+Results are saved as Markdown, JSON, and SARIF files for human and CI review. The Go implementation was adapted from the original code by Adam Sobotka and Codex. The original repository does not accept contributions, so ongoing work for the Go version lives here.
 
 ## Current Limitations
 

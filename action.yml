@@ -1,5 +1,8 @@
 name: nano-analyzer
 description: LLM-powered vulnerability scanning with triage-validated CI failure policy.
+branding:
+  icon: bell
+  color: yellow
 
 inputs:
   target:
