@@ -132,7 +132,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: vorcigernix/nano-analyzer@v0.2.6
+      - uses: vorcigernix/nano-analyzer@v0.2.7
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 ```
@@ -142,7 +142,7 @@ That is enough to scan changed files on pull requests, upload SARIF when GitHub 
 If you are using an organization mirror, replace only the `uses:` line:
 
 ```yaml
-      - uses: weareaisle/nano-analyzer@v0.2.6
+      - uses: weareaisle/nano-analyzer@v0.2.7
 ```
 
 The action downloads a release binary by default and falls back to building from source if no matching binary is available. To force one behavior, set `install-mode` to `binary` or `source`.
@@ -154,7 +154,7 @@ The default OpenAI model is `gpt-4o-mini` for compatibility with more API projec
 Non-blocking trial:
 
 ```yaml
-      - uses: vorcigernix/nano-analyzer@v0.2.6
+      - uses: vorcigernix/nano-analyzer@v0.2.7
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         with:
@@ -164,7 +164,7 @@ Non-blocking trial:
 Explicit PR gate:
 
 ```yaml
-      - uses: vorcigernix/nano-analyzer@v0.2.6
+      - uses: vorcigernix/nano-analyzer@v0.2.7
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         with:
@@ -178,7 +178,7 @@ Explicit PR gate:
 Use a different OpenAI model:
 
 ```yaml
-      - uses: vorcigernix/nano-analyzer@v0.2.6
+      - uses: vorcigernix/nano-analyzer@v0.2.7
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         with:
