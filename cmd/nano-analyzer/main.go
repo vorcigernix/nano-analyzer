@@ -14,7 +14,7 @@ import (
 	"github.com/weareaisle/nano-analyzer/internal/domain"
 )
 
-const version = "0.2.10"
+const version = "0.2.11"
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -99,6 +99,7 @@ func runScan(args []string) int {
 	if !quiet {
 		progress = newTerminalProgress(os.Stderr)
 		runner.Logf = progress.Logf
+		llmClient.SetLogger(progress.Logf)
 	}
 	summary, err := runner.Run(context.Background(), cfg)
 	if progress != nil {

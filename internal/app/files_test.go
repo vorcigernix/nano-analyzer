@@ -1,7 +1,9 @@
 package app
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -114,4 +116,65 @@ func TestDefaultOutputRootReturnsAbsolutePath(t *testing.T) {
 	if _, err := os.Stat(filepath.Dir(root)); err != nil {
 		t.Fatalf("expected parent dir to exist: %v", err)
 	}
+}
+
+func TestDiscoverSourceFilesSkipsGitignoredFiles(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+
+	writeTestFile(t, filepath.Join(repo, ".gitignore"), "ignored.go\nignored-dir/\n")
+	writeTestFile(t, filepath.Join(repo, "tracked.go"), "package main\n")
+	writeTestFile(t, filepath.Join(repo, "ignored.go"), "package ignored\n")
+	writeTestFile(t, filepath.Join(repo, "ignored-dir", "inside.go"), "package ignored\n")
+
+	cfg := DefaultConfig()
+	cfg.Paths = []string{repo}
+	cfg.RepoDir = repo
+
+	files, skipped, err := DiscoverSourceFiles(context.Background(), cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("expected 1 scannable file, got %d", len(files))
+	}
+	if files[0].DisplayName != "tracked.go" {
+		t.Fatalf("expected tracked.go to be scanned, got %s", files[0].DisplayName)
+	}
+
+	assertSkippedReason(t, skipped, filepath.Join(repo, "ignored.go"), "gitignore")
+	assertSkippedReason(t, skipped, filepath.Join(repo, "ignored-dir", "inside.go"), "gitignore")
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, output)
+	}
+}
+
+func writeTestFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertSkippedReason(t *testing.T, skipped []SkippedFile, path, reason string) {
+	t.Helper()
+	for _, entry := range skipped {
+		if entry.Path == path && entry.Reason == reason {
+			return
+		}
+	}
+	t.Fatalf("expected skipped entry %s (%s), got %#v", path, reason, skipped)
 }

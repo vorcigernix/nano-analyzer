@@ -31,15 +31,20 @@ const (
 )
 
 type Client struct {
-	provider      Provider
-	openAIKey     string
-	openRouterKey string
-	httpClient    *http.Client
-	maxRetries    int
-	semaphore     chan struct{}
-	randMu        sync.Mutex
-	referer       string
-	title         string
+	provider       Provider
+	openAIKey      string
+	openRouterKey  string
+	httpClient     *http.Client
+	maxRetries     int
+	semaphore      chan struct{}
+	randMu         sync.Mutex
+	stateMu        sync.Mutex
+	rateLimitUntil time.Time
+	referer        string
+	title          string
+	logf           func(format string, args ...any)
+	now            func() time.Time
+	sleep          func(context.Context, time.Duration) error
 }
 
 type Option func(*Client)
@@ -59,6 +64,8 @@ func NewClient(provider string, maxConcurrent int, opts ...Option) *Client {
 		semaphore:  make(chan struct{}, maxConcurrent),
 		referer:    "https://github.com/weareaisle/nano-analyzer",
 		title:      "nano-analyzer",
+		now:        time.Now,
+		sleep:      sleepContext,
 	}
 	if client.provider == "" {
 		client.provider = ProviderAuto
@@ -90,6 +97,32 @@ func WithMaxRetries(maxRetries int) Option {
 			c.maxRetries = maxRetries
 		}
 	}
+}
+
+func WithLogger(logf func(format string, args ...any)) Option {
+	return func(c *Client) {
+		c.logf = logf
+	}
+}
+
+func WithNow(now func() time.Time) Option {
+	return func(c *Client) {
+		if now != nil {
+			c.now = now
+		}
+	}
+}
+
+func WithSleep(sleep func(context.Context, time.Duration) error) Option {
+	return func(c *Client) {
+		if sleep != nil {
+			c.sleep = sleep
+		}
+	}
+}
+
+func (c *Client) SetLogger(logf func(format string, args ...any)) {
+	c.logf = logf
 }
 
 type Backend struct {
@@ -160,7 +193,7 @@ func (c *Client) Chat(ctx context.Context, request ports.ChatRequest) (ports.Cha
 	}
 
 	var lastErr error
-	for attempt := 0; attempt < c.maxRetries; attempt++ {
+	for attempt := 0; attempt < c.maxRetries; {
 		if err := c.sleepBeforeAttempt(ctx, attempt); err != nil {
 			return ports.ChatResponse{}, err
 		}
@@ -168,10 +201,20 @@ func (c *Client) Chat(ctx context.Context, request ports.ChatRequest) (ports.Cha
 		resp, err := c.post(ctx, backend, body)
 		elapsed := time.Since(start).Seconds()
 		if err != nil {
+			if status, ok := asRetryableStatus(err); ok && status.rateLimited {
+				if wait := c.noteRateLimit(status); wait > 0 {
+					if err := c.sleep(ctx, wait); err != nil {
+						return ports.ChatResponse{}, err
+					}
+				}
+				lastErr = err
+				continue
+			}
 			if !retryableError(err) || attempt == c.maxRetries-1 {
 				return ports.ChatResponse{}, err
 			}
 			lastErr = err
+			attempt++
 			continue
 		}
 		resp.ElapsedSeconds = elapsed
@@ -210,7 +253,18 @@ func (c *Client) post(ctx context.Context, backend Backend, body []byte) (ports.
 		return ports.ChatResponse{}, err
 	}
 	if httpResp.StatusCode == http.StatusTooManyRequests || httpResp.StatusCode >= 500 {
-		return ports.ChatResponse{}, retryableStatus{status: httpResp.StatusCode, body: string(responseText)}
+		return ports.ChatResponse{}, retryableStatus{
+			status:      httpResp.StatusCode,
+			body:        string(responseText),
+			rateLimited: isRateLimitResponse(httpResp.StatusCode, responseText),
+		}
+	}
+	if isRateLimitResponse(httpResp.StatusCode, responseText) {
+		return ports.ChatResponse{}, retryableStatus{
+			status:      httpResp.StatusCode,
+			body:        string(responseText),
+			rateLimited: true,
+		}
 	}
 	if httpResp.StatusCode != http.StatusOK {
 		return ports.ChatResponse{}, fmt.Errorf("api %d: %s", httpResp.StatusCode, trim(string(responseText), 400))
@@ -254,8 +308,9 @@ type chatCompletionResponse struct {
 }
 
 type retryableStatus struct {
-	status int
-	body   string
+	status      int
+	body        string
+	rateLimited bool
 }
 
 func (e retryableStatus) Error() string {
@@ -267,21 +322,28 @@ func retryableError(err error) bool {
 	return errors.As(err, &status)
 }
 
+func asRetryableStatus(err error) (retryableStatus, bool) {
+	var status retryableStatus
+	if errors.As(err, &status) {
+		return status, true
+	}
+	return retryableStatus{}, false
+}
+
 func (c *Client) sleepBeforeAttempt(ctx context.Context, attempt int) error {
+	if err := c.waitForRateLimitReset(ctx); err != nil {
+		return err
+	}
 	var delay time.Duration
 	if attempt == 0 {
 		delay = time.Duration(c.jitterMillis(100, 3000)) * time.Millisecond
 	} else {
 		delay = time.Duration(1<<attempt)*time.Second + time.Duration(c.jitterMillis(0, 2000))*time.Millisecond
 	}
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
+	if delay <= 0 {
 		return nil
-	case <-ctx.Done():
-		return ctx.Err()
 	}
+	return c.sleep(ctx, delay)
 }
 
 func (c *Client) jitterMillis(min, max int) int {
@@ -299,6 +361,77 @@ func trim(value string, max int) string {
 		return value
 	}
 	return value[:max]
+}
+
+func (c *Client) waitForRateLimitReset(ctx context.Context) error {
+	c.stateMu.Lock()
+	wait := c.rateLimitUntil.Sub(c.now())
+	if wait <= 0 {
+		c.rateLimitUntil = time.Time{}
+	}
+	c.stateMu.Unlock()
+	if wait <= 0 {
+		return nil
+	}
+	return c.sleep(ctx, wait)
+}
+
+func (c *Client) noteRateLimit(status retryableStatus) time.Duration {
+	now := c.now()
+	until := nextMinuteBoundary(now)
+	wait := until.Sub(now)
+	if wait <= 0 {
+		wait = time.Second
+		until = now.Add(wait)
+	}
+
+	var extended bool
+	c.stateMu.Lock()
+	if until.After(c.rateLimitUntil) {
+		c.rateLimitUntil = until
+		extended = true
+	}
+	c.stateMu.Unlock()
+
+	if extended && c.logf != nil {
+		c.logf(
+			"llm: rate limit hit (api %d); waiting %s until %s, then retrying",
+			status.status,
+			wait.Round(time.Second),
+			until.Format("15:04:05"),
+		)
+	}
+	return wait
+}
+
+func nextMinuteBoundary(now time.Time) time.Time {
+	return now.Truncate(time.Minute).Add(time.Minute)
+}
+
+func isRateLimitResponse(statusCode int, body []byte) bool {
+	text := strings.ToLower(string(body))
+	if strings.Contains(text, "insufficient_quota") || strings.Contains(text, "quota exceeded") {
+		return false
+	}
+	if statusCode == http.StatusTooManyRequests {
+		return strings.Contains(text, "rate limit") ||
+			strings.Contains(text, "too many requests") ||
+			strings.Contains(text, "requests per min") ||
+			strings.Contains(text, "rpm") ||
+			text == ""
+	}
+	return strings.Contains(text, "rate limit reached") || strings.Contains(text, "too many requests")
+}
+
+func sleepContext(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 var _ ports.LLMClient = (*Client)(nil)

@@ -1,14 +1,17 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/weareaisle/nano-analyzer/internal/domain"
 	"github.com/weareaisle/nano-analyzer/internal/ports"
@@ -25,7 +28,10 @@ func DiscoverSourceFiles(ctx context.Context, cfg Config, detector ports.Changed
 		return nil, nil, err
 	}
 	files := make([]domain.SourceFile, 0, len(candidates))
-	skipped := make([]SkippedFile, 0)
+	candidates, skipped, err := filterGitIgnoredPaths(ctx, cfg.RepoDir, candidates)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	basePath := cfg.RepoDir
 	if len(cfg.Paths) == 1 {
@@ -53,6 +59,102 @@ func DiscoverSourceFiles(ctx context.Context, cfg Config, detector ports.Changed
 	sort.Slice(files, func(i, j int) bool { return files[i].DisplayName < files[j].DisplayName })
 	sort.Slice(skipped, func(i, j int) bool { return skipped[i].Path < skipped[j].Path })
 	return files, skipped, nil
+}
+
+func filterGitIgnoredPaths(ctx context.Context, repoDir string, candidates []string) ([]string, []SkippedFile, error) {
+	if len(candidates) == 0 {
+		return nil, nil, nil
+	}
+	type candidateRef struct {
+		path    string
+		gitPath string
+	}
+	refs := make([]candidateRef, 0, len(candidates))
+	gitPaths := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		abs, err := filepath.Abs(candidate)
+		if err != nil {
+			return nil, nil, err
+		}
+		rel, err := filepath.Rel(repoDir, abs)
+		if err != nil {
+			return nil, nil, err
+		}
+		ref := candidateRef{path: candidate}
+		if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			ref.gitPath = filepath.ToSlash(filepath.Clean(rel))
+			gitPaths = append(gitPaths, ref.gitPath)
+		}
+		refs = append(refs, ref)
+	}
+	if len(gitPaths) == 0 {
+		return candidates, nil, nil
+	}
+
+	ignored, ok, err := gitIgnoredPaths(ctx, repoDir, gitPaths)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !ok || len(ignored) == 0 {
+		return candidates, nil, nil
+	}
+
+	filtered := make([]string, 0, len(candidates))
+	skipped := make([]SkippedFile, 0, len(ignored))
+	for _, ref := range refs {
+		if ref.gitPath != "" && ignored[ref.gitPath] {
+			skipped = append(skipped, SkippedFile{Path: ref.path, Reason: "gitignore"})
+			continue
+		}
+		filtered = append(filtered, ref.path)
+	}
+	return filtered, skipped, nil
+}
+
+func gitIgnoredPaths(ctx context.Context, repoDir string, paths []string) (map[string]bool, bool, error) {
+	if len(paths) == 0 {
+		return nil, true, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", "check-ignore", "-z", "--stdin")
+	cmd.Dir = repoDir
+	cmd.Stdin = strings.NewReader(strings.Join(paths, "\x00") + "\x00")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			return nil, false, nil
+		}
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			switch exitErr.ExitCode() {
+			case 1:
+				return map[string]bool{}, true, nil
+			case 128:
+				return nil, false, nil
+			}
+		}
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return nil, false, fmt.Errorf("git check-ignore failed: %s", msg)
+	}
+
+	ignored := map[string]bool{}
+	for _, field := range bytes.Split(stdout.Bytes(), []byte{0}) {
+		if len(field) == 0 {
+			continue
+		}
+		ignored[string(field)] = true
+	}
+	return ignored, true, nil
 }
 
 func candidatePaths(ctx context.Context, cfg Config, detector ports.ChangedFileDetector) ([]string, error) {

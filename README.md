@@ -53,6 +53,12 @@ export OPENROUTER_API_KEY=sk-or-...
 
 By default the scanner determines which key to use from the model name: models containing `/` route through OpenRouter; other models route through OpenAI. Override this with `--provider openai` or `--provider openrouter`.
 
+### Rate Limits
+
+Nano-analyzer is intentionally concurrency-heavy. A single run fans out requests across context generation, scanning, and multi-round triage, so the usual low default requests-per-second limit is generally not enough for practical scans.
+
+Use an API project or provider with higher throughput if you want reasonable scan times. If you only have a low-rate key, reduce `--parallel`, `--triage-parallel`, and `--max-connections` aggressively or expect frequent rate limiting and much slower runs.
+
 ## Usage
 
 ```bash
@@ -135,7 +141,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: vorcigernix/nano-analyzer@v0.2.10
+      - uses: vorcigernix/nano-analyzer@v0.2.11
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 ```
@@ -145,19 +151,21 @@ That is enough to scan changed files on pull requests, upload SARIF when GitHub 
 If you are using an organization mirror, replace only the `uses:` line:
 
 ```yaml
-      - uses: weareaisle/nano-analyzer@v0.2.10
+      - uses: weareaisle/nano-analyzer@v0.2.11
 ```
 
 The action downloads a release binary by default and falls back to building from source if no matching binary is available. To force one behavior, set `install-mode` to `binary` or `source`.
 
 The default OpenAI model is `gpt-5.4-nano`. Override `model` if you want a larger GPT-5 tier or a different provider.
 
+The same rate-limit caveat applies in CI: low default API throughput is usually not enough for this workload unless you dial concurrency down sharply.
+
 ### Common Options
 
 Non-blocking trial:
 
 ```yaml
-      - uses: vorcigernix/nano-analyzer@v0.2.10
+      - uses: vorcigernix/nano-analyzer@v0.2.11
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         with:
@@ -167,7 +175,7 @@ Non-blocking trial:
 Explicit PR gate:
 
 ```yaml
-      - uses: vorcigernix/nano-analyzer@v0.2.10
+      - uses: vorcigernix/nano-analyzer@v0.2.11
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         with:
@@ -181,7 +189,7 @@ Explicit PR gate:
 Use a different OpenAI model:
 
 ```yaml
-      - uses: vorcigernix/nano-analyzer@v0.2.10
+      - uses: vorcigernix/nano-analyzer@v0.2.11
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         with:
