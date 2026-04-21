@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	DefaultModel           = "gpt-4o-mini"
+	DefaultModel           = "gpt-5.4-nano"
 	DefaultParallel        = 50
 	DefaultTriageParallel  = 50
 	DefaultMaxChars        = 200_000

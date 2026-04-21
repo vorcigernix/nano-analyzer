@@ -46,7 +46,18 @@ func TestNormalizeMakesRepoDirAbsolute(t *testing.T) {
 
 func TestNormalizeMakesOutputDirAbsolute(t *testing.T) {
 	tmp := t.TempDir()
-	t.Chdir(tmp)
+	prev, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.Chdir(prev); err != nil {
+			t.Fatalf("restore working directory: %v", err)
+		}
+	}()
 
 	cfg := DefaultConfig()
 	cfg.Paths = []string{"."}
@@ -55,7 +66,10 @@ func TestNormalizeMakesOutputDirAbsolute(t *testing.T) {
 	if err := cfg.Normalize(); err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(tmp, "results")
+	want, err := filepath.Abs("results")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if cfg.OutputDir != want {
 		t.Fatalf("expected output dir %s, got %s", want, cfg.OutputDir)
 	}
@@ -63,13 +77,27 @@ func TestNormalizeMakesOutputDirAbsolute(t *testing.T) {
 
 func TestDefaultOutputRootUsesCurrentWorkingDirectory(t *testing.T) {
 	tmp := t.TempDir()
-	t.Chdir(tmp)
+	prev, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.Chdir(prev); err != nil {
+			t.Fatalf("restore working directory: %v", err)
+		}
+	}()
 
 	root, err := DefaultOutputRoot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(tmp, "nano-analyzer-results")
+	want, err := filepath.Abs("nano-analyzer-results")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if root != want {
 		t.Fatalf("expected output root %s, got %s", want, root)
 	}
