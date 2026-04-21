@@ -14,7 +14,7 @@ import (
 	"github.com/weareaisle/nano-analyzer/internal/domain"
 )
 
-const version = "0.2.5"
+const version = "0.2.9"
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -52,7 +52,7 @@ func runScan(args []string) int {
 	fs.SetOutput(os.Stderr)
 	fs.StringVar(&cfg.Model, "model", cfg.Model, "model for context, scan, and triage stages")
 	fs.StringVar(&cfg.Provider, "provider", cfg.Provider, "provider: auto, openai, openrouter")
-	fs.StringVar(&cfg.OutputDir, "output-dir", cfg.OutputDir, "output directory; defaults to ~/nano-analyzer-results/<timestamp>")
+	fs.StringVar(&cfg.OutputDir, "output-dir", cfg.OutputDir, "output directory; defaults to ./nano-analyzer-results/<timestamp>")
 	fs.StringVar(&formatValue, "format", formatValue, "comma-separated outputs: json,markdown,sarif")
 	fs.IntVar(&cfg.Parallel, "parallel", cfg.Parallel, "max concurrent file scans")
 	fs.IntVar(&cfg.MaxConnections, "max-connections", cfg.MaxConnections, "max total concurrent API calls")
@@ -95,17 +95,38 @@ func runScan(args []string) int {
 		ChangedDetector: github.NewChangedFileDetector(),
 		Writer:          writer,
 	}
+	var progress *terminalProgress
 	if !quiet {
-		runner.Logf = func(format string, args ...any) {
-			fmt.Fprintf(os.Stderr, format+"\n", args...)
-		}
+		progress = newTerminalProgress(os.Stderr)
+		runner.Logf = progress.Logf
 	}
 	summary, err := runner.Run(context.Background(), cfg)
+	if progress != nil {
+		progress.Close()
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "scan failed: %v\n", err)
 		return 2
 	}
-	fmt.Printf("nano-analyzer: scanned %d files, output %s\n", summary.FilesScanned, summary.OutputDir)
+	counts := domain.NewSeverityCounts()
+	totalFindings := 0
+	for _, result := range summary.Results {
+		for _, sev := range domain.SeverityOrder {
+			counts[sev] += result.Severities[sev]
+		}
+		totalFindings += len(result.Findings)
+	}
+	fmt.Printf(
+		"nano-analyzer: scanned %d files, findings %d (critical=%d high=%d medium=%d low=%d informational=%d), output %s\n",
+		summary.FilesScanned,
+		totalFindings,
+		counts[domain.SeverityCritical],
+		counts[domain.SeverityHigh],
+		counts[domain.SeverityMedium],
+		counts[domain.SeverityLow],
+		counts[domain.SeverityInformational],
+		summary.OutputDir,
+	)
 	if summary.ErrorFiles > 0 {
 		fmt.Fprintf(os.Stderr, "nano-analyzer: %d file(s) failed to scan\n", summary.ErrorFiles)
 		return 2

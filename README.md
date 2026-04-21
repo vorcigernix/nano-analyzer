@@ -99,9 +99,12 @@ go run ./cmd/nano-analyzer scan --fail-mode validated --fail-on high --fail-conf
 | `--fail-confidence` | `0.7` | Minimum validated confidence required to fail |
 | `--project` | directory name | Project name used in triage prompts |
 | `--repo-dir` | auto | Repo root for grep and changed-file lookups |
-| `--output-dir` | `~/nano-analyzer-results/<timestamp>/` | Where to save results |
+| `--output-dir` | `./nano-analyzer-results/<timestamp>/` | Where to save results |
 | `--max-chars` | `200,000` | Skip files larger than this |
 | `--verbose-triage` | off | Show extra triage progress |
+| `--quiet` | off | Suppress live terminal progress logs |
+
+By default, the CLI writes live scan and triage progress to stderr. In an interactive terminal it renders an animated ASCII status line; in CI or redirected output it falls back to plain log lines. Both modes include completed file counts and running issue totals.
 
 ## GitHub Actions
 
@@ -132,7 +135,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: vorcigernix/nano-analyzer@v0.2.8
+      - uses: vorcigernix/nano-analyzer@v0.2.9
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 ```
@@ -142,7 +145,7 @@ That is enough to scan changed files on pull requests, upload SARIF when GitHub 
 If you are using an organization mirror, replace only the `uses:` line:
 
 ```yaml
-      - uses: weareaisle/nano-analyzer@v0.2.8
+      - uses: weareaisle/nano-analyzer@v0.2.9
 ```
 
 The action downloads a release binary by default and falls back to building from source if no matching binary is available. To force one behavior, set `install-mode` to `binary` or `source`.
@@ -154,7 +157,7 @@ The default OpenAI model is `gpt-4o-mini` for compatibility with more API projec
 Non-blocking trial:
 
 ```yaml
-      - uses: vorcigernix/nano-analyzer@v0.2.8
+      - uses: vorcigernix/nano-analyzer@v0.2.9
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         with:
@@ -164,7 +167,7 @@ Non-blocking trial:
 Explicit PR gate:
 
 ```yaml
-      - uses: vorcigernix/nano-analyzer@v0.2.8
+      - uses: vorcigernix/nano-analyzer@v0.2.9
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         with:
@@ -178,7 +181,7 @@ Explicit PR gate:
 Use a different OpenAI model:
 
 ```yaml
-      - uses: vorcigernix/nano-analyzer@v0.2.8
+      - uses: vorcigernix/nano-analyzer@v0.2.9
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         with:
@@ -236,7 +239,7 @@ GitHub does not expose repository secrets to untrusted fork PRs in normal `pull_
 
 ## Output
 
-Results are saved to `~/nano-analyzer-results/<timestamp>/` or `--output-dir`:
+Results are saved to `./nano-analyzer-results/<timestamp>/` by default, or to `--output-dir` when provided:
 
 ```text
 <timestamp>/

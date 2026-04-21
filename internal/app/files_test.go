@@ -1,6 +1,7 @@
 package app
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -40,5 +41,49 @@ func TestNormalizeMakesRepoDirAbsolute(t *testing.T) {
 	}
 	if !filepath.IsAbs(cfg.RepoDir) {
 		t.Fatalf("expected absolute repo dir, got %s", cfg.RepoDir)
+	}
+}
+
+func TestNormalizeMakesOutputDirAbsolute(t *testing.T) {
+	tmp := t.TempDir()
+	t.Chdir(tmp)
+
+	cfg := DefaultConfig()
+	cfg.Paths = []string{"."}
+	cfg.RepoDir = "."
+	cfg.OutputDir = "results"
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(tmp, "results")
+	if cfg.OutputDir != want {
+		t.Fatalf("expected output dir %s, got %s", want, cfg.OutputDir)
+	}
+}
+
+func TestDefaultOutputRootUsesCurrentWorkingDirectory(t *testing.T) {
+	tmp := t.TempDir()
+	t.Chdir(tmp)
+
+	root, err := DefaultOutputRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(tmp, "nano-analyzer-results")
+	if root != want {
+		t.Fatalf("expected output root %s, got %s", want, root)
+	}
+}
+
+func TestDefaultOutputRootReturnsAbsolutePath(t *testing.T) {
+	root, err := DefaultOutputRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(root) {
+		t.Fatalf("expected absolute output root, got %s", root)
+	}
+	if _, err := os.Stat(filepath.Dir(root)); err != nil {
+		t.Fatalf("expected parent dir to exist: %v", err)
 	}
 }

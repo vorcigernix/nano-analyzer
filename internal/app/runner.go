@@ -22,6 +22,85 @@ type Runner struct {
 	Logf            func(format string, args ...any)
 }
 
+type scanProgress struct {
+	total    int
+	done     int
+	errors   int
+	findings map[domain.Severity]int
+}
+
+func newScanProgress(total int) scanProgress {
+	return scanProgress{
+		total:    total,
+		findings: domain.NewSeverityCounts(),
+	}
+}
+
+func (p *scanProgress) record(result domain.ScanResult) {
+	p.done++
+	if result.Status != "ok" {
+		p.errors++
+		return
+	}
+	for _, sev := range domain.SeverityOrder {
+		p.findings[sev] += result.Severities[sev]
+	}
+}
+
+func (p scanProgress) totalFindings() int {
+	total := 0
+	for _, sev := range domain.SeverityOrder {
+		total += p.findings[sev]
+	}
+	return total
+}
+
+func (p scanProgress) summary() string {
+	return fmt.Sprintf(
+		"totals issues=%d c=%d h=%d m=%d l=%d i=%d err=%d",
+		p.totalFindings(),
+		p.findings[domain.SeverityCritical],
+		p.findings[domain.SeverityHigh],
+		p.findings[domain.SeverityMedium],
+		p.findings[domain.SeverityLow],
+		p.findings[domain.SeverityInformational],
+		p.errors,
+	)
+}
+
+type triageProgress struct {
+	total    int
+	done     int
+	verdicts map[domain.Verdict]int
+}
+
+func newTriageProgress(total int) triageProgress {
+	return triageProgress{
+		total: total,
+		verdicts: map[domain.Verdict]int{
+			domain.VerdictValid:     0,
+			domain.VerdictInvalid:   0,
+			domain.VerdictUncertain: 0,
+			domain.VerdictError:     0,
+		},
+	}
+}
+
+func (p *triageProgress) record(result domain.TriageResult) {
+	p.done++
+	p.verdicts[result.Verdict]++
+}
+
+func (p triageProgress) summary() string {
+	return fmt.Sprintf(
+		"totals valid=%d invalid=%d uncertain=%d error=%d",
+		p.verdicts[domain.VerdictValid],
+		p.verdicts[domain.VerdictInvalid],
+		p.verdicts[domain.VerdictUncertain],
+		p.verdicts[domain.VerdictError],
+	)
+}
+
 func (r Runner) Run(ctx context.Context, cfg Config) (domain.Summary, error) {
 	if err := cfg.Normalize(); err != nil {
 		return domain.Summary{}, err
@@ -91,6 +170,7 @@ func (r Runner) scanFiles(ctx context.Context, cfg Config, timestamp string, fil
 	jobs := make(chan domain.SourceFile)
 	results := make(chan domain.ScanResult, len(files))
 	var wg sync.WaitGroup
+	r.logf("scan: starting %d file(s) with %d worker(s)", len(files), workers)
 	for idx := 0; idx < workers; idx++ {
 		wg.Add(1)
 		go func() {
@@ -110,18 +190,38 @@ func (r Runner) scanFiles(ctx context.Context, cfg Config, timestamp string, fil
 			}
 		}
 	}()
-	wg.Wait()
-	close(results)
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
 
 	scanResults := make([]domain.ScanResult, 0, len(files))
+	progress := newScanProgress(len(files))
 	for result := range results {
 		scanResults = append(scanResults, result)
+		progress.record(result)
 		if result.Status == "ok" {
-			r.logf("scanned %s: %s", result.DisplayName, domain.TopSeverity(result.Severities))
+			r.logf(
+				"scan %d/%d %s %s findings=%d %s",
+				progress.done,
+				progress.total,
+				result.DisplayName,
+				domain.TopSeverity(result.Severities),
+				len(result.Findings),
+				progress.summary(),
+			)
 		} else {
-			r.logf("scan error %s: %s", result.DisplayName, result.Error)
+			r.logf(
+				"scan %d/%d %s error=%s %s",
+				progress.done,
+				progress.total,
+				result.DisplayName,
+				result.Error,
+				progress.summary(),
+			)
 		}
 	}
+	r.logf("scan: complete %d/%d %s", progress.done, progress.total, progress.summary())
 	sort.Slice(scanResults, func(i, j int) bool {
 		a, b := scanResults[i], scanResults[j]
 		for _, sev := range []domain.Severity{domain.SeverityCritical, domain.SeverityHigh, domain.SeverityMedium, domain.SeverityLow} {
@@ -210,12 +310,14 @@ func (r Runner) triageResults(ctx context.Context, cfg Config, results []domain.
 		}
 	}
 	if len(jobsList) == 0 {
+		r.logf("triage: no findings at or above %s", cfg.TriageThreshold)
 		return nil
 	}
 	workers := min(cfg.TriageParallel, len(jobsList))
 	jobsCh := make(chan job)
 	resultsCh := make(chan domain.TriageResult, len(jobsList))
 	var wg sync.WaitGroup
+	r.logf("triage: evaluating %d finding(s) at or above %s with %d worker(s)", len(jobsList), cfg.TriageThreshold, workers)
 	for idx := 0; idx < workers; idx++ {
 		wg.Add(1)
 		go func() {
@@ -235,14 +337,42 @@ func (r Runner) triageResults(ctx context.Context, cfg Config, results []domain.
 			}
 		}
 	}()
-	wg.Wait()
-	close(resultsCh)
+	go func() {
+		wg.Wait()
+		close(resultsCh)
+	}()
 
 	triages := make([]domain.TriageResult, 0, len(jobsList))
+	progress := newTriageProgress(len(jobsList))
 	for triage := range resultsCh {
 		triages = append(triages, triage)
-		r.logf("triage %s %s: %s %.0f%%", triage.File, triage.FindingTitle, triage.Verdict, triage.Confidence*100)
+		progress.record(triage)
+		if cfg.VerboseTriage {
+			r.logf(
+				"triage %d/%d %s %s: %s %.0f%% rounds=%s %s",
+				progress.done,
+				progress.total,
+				triage.File,
+				triage.FindingTitle,
+				triage.Verdict,
+				triage.Confidence*100,
+				triage.Verdicts,
+				progress.summary(),
+			)
+			continue
+		}
+		r.logf(
+			"triage %d/%d %s %s: %s %.0f%% %s",
+			progress.done,
+			progress.total,
+			triage.File,
+			triage.FindingTitle,
+			triage.Verdict,
+			triage.Confidence*100,
+			progress.summary(),
+		)
 	}
+	r.logf("triage: complete %d/%d %s", progress.done, progress.total, progress.summary())
 	sort.Slice(triages, func(i, j int) bool {
 		if triages[i].Verdict != triages[j].Verdict {
 			return triages[i].Verdict == domain.VerdictValid

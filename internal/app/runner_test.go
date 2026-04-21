@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,4 +99,67 @@ func TestRunnerEndToEndWithFakeAdapters(t *testing.T) {
 	if !strings.Contains(string(content), "Stack buffer overflow") {
 		t.Fatalf("survivor output missing finding: %s", string(content))
 	}
+}
+
+func TestRunnerLogsLiveProgress(t *testing.T) {
+	repo := t.TempDir()
+	srcDir := filepath.Join(repo, "src")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(srcDir, "vuln.c")
+	if err := os.WriteFile(sourcePath, []byte("void parse(char *s){char b[8]; strcpy(b,s);}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(repo, "out")
+	cfg := DefaultConfig()
+	cfg.Paths = []string{srcDir}
+	cfg.RepoDir = repo
+	cfg.OutputDir = outDir
+	cfg.Parallel = 1
+	cfg.TriageParallel = 1
+	cfg.TriageRounds = 1
+	cfg.VerboseTriage = true
+	cfg.Formats = ParseFormats("json")
+
+	llm := &fakeLLM{responses: []string{
+		"Context. GREP: MAX",
+		`[{"severity":"high","title":"Stack buffer overflow","function":"parse()","description":"strcpy into b[8]"}]`,
+		`{"verdict":"VALID","reasoning":"attacker controls s","crux":"strcpy is unbounded","grep":"strcpy"}`,
+	}}
+	var logs []string
+	runner := Runner{
+		LLM:      llm,
+		Searcher: fakeSearcher{},
+		Writer:   output.NewWriter(outDir, cfg.Formats, ""),
+		Logf: func(format string, args ...any) {
+			logs = append(logs, fmt.Sprintf(format, args...))
+		},
+	}
+	if _, err := runner.Run(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	expected := []string{
+		"scan: starting 1 file(s) with 1 worker(s)",
+		"scan 1/1 vuln.c high findings=1 totals issues=1 c=0 h=1 m=0 l=0 i=0 err=0",
+		"scan: complete 1/1 totals issues=1 c=0 h=1 m=0 l=0 i=0 err=0",
+		"triage: evaluating 1 finding(s) at or above medium with 1 worker(s)",
+		"triage 1/1 vuln.c Stack buffer overflow: VALID 100% rounds=V totals valid=1 invalid=0 uncertain=0 error=0",
+		"triage: complete 1/1 totals valid=1 invalid=0 uncertain=0 error=0",
+	}
+	for _, want := range expected {
+		if !containsLogLine(logs, want) {
+			t.Fatalf("missing log line %q in %#v", want, logs)
+		}
+	}
+}
+
+func containsLogLine(lines []string, want string) bool {
+	for _, line := range lines {
+		if line == want {
+			return true
+		}
+	}
+	return false
 }

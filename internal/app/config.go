@@ -159,6 +159,13 @@ func (c *Config) Normalize() error {
 		return err
 	}
 	c.RepoDir = absRepo
+	if c.OutputDir != "" {
+		absOut, err := filepath.Abs(c.OutputDir)
+		if err != nil {
+			return err
+		}
+		c.OutputDir = absOut
+	}
 	if c.Project == "" {
 		c.Project = filepath.Base(c.RepoDir)
 		if c.Project == "." || c.Project == string(filepath.Separator) || c.Project == "" {
@@ -169,11 +176,11 @@ func (c *Config) Normalize() error {
 }
 
 func DefaultOutputRoot() (string, error) {
-	home, err := os.UserHomeDir()
+	wd, err := os.Getwd()
 	if err != nil {
-		return "", fmt.Errorf("resolve home directory: %w", err)
+		return "", fmt.Errorf("resolve working directory: %w", err)
 	}
-	return filepath.Join(home, "nano-analyzer-results"), nil
+	return filepath.Join(wd, "nano-analyzer-results"), nil
 }
 
 func inferRepoDir(path string) (string, error) {
