@@ -1,6 +1,7 @@
 # Nano-analyzer
 
 **A minimal LLM-powered zero-day vulnerability scanner by [AISLE](https://aisle.com).**
+This code is a golang rewrite of original Aisle project adapted to run as github action by Adam Sobotka from [Meiro](https://meiro.io)
 
 ![aisle-nano-analyzer-diagram](aisle-nano-analyzer.png)
 
