@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and publish
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -12,6 +18,8 @@ jobs:
   build:
     name: Build ${{ matrix.os }} ${{ matrix.arch }}
     runs-on: ubuntu-latest
+    env:
+      RELEASE_REF: ${{ github.event.inputs.tag || github.ref }}
     strategy:
       fail-fast: false
       matrix:
@@ -33,6 +41,8 @@ jobs:
             ext: ".exe"
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_REF }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -54,6 +64,8 @@ jobs:
     name: Publish release
     runs-on: ubuntu-latest
     needs: build
+    env:
+      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -64,14 +76,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" dist/* \
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/* \
               --repo "$GITHUB_REPOSITORY" \
               --clobber
           else
-            gh release create "$GITHUB_REF_NAME" dist/* \
+            gh release create "$RELEASE_TAG" dist/* \
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
-              --title "$GITHUB_REF_NAME" \
-              --notes "nano-analyzer $GITHUB_REF_NAME"
+              --title "$RELEASE_TAG" \
+              --notes "nano-analyzer $RELEASE_TAG"
           fi
